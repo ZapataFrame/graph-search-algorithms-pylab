@@ -10,12 +10,12 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QComboBox, QSlider, QSplitter, QTableWidget, QTableWidgetItem,
     QHeaderView, QListWidget, QAbstractItemView, QFrame, QSpinBox,
-    QFileDialog, QMessageBox, QStackedWidget, QScrollArea, QProgressDialog,
+    QFileDialog, QMessageBox, QProgressDialog,
 )
 from graph_data import build_graph, load_graph
 from algorithms import search, brute_force, ALGORITHMS, DESCRIPTIONS
 
-from rendering import GraphCanvas, COLORS, FONT, load_font, render_slide, fmt, node_state
+from rendering import GraphCanvas, COLORS, FONT, load_font, render_slide, fmt, node_state, legend_text
 from exporting import ExportJob
 
 class Window(QMainWindow):
@@ -25,7 +25,6 @@ class Window(QMainWindow):
         self.original_model = self.model
         self.negative_model = None
         self.graph_name = 'Original'
-        self.presentation_mode = False
         self.export_job = None
         negative_path = Path(__file__).parent / 'graphs/negative.json'
         self.negative_error = None
@@ -73,9 +72,7 @@ class Window(QMainWindow):
         self.image_button.clicked.connect(self.export_image)
         self.process_button = QPushButton('Guardar proceso')
         self.process_button.clicked.connect(self.export_process)
-        self.presentation_button = QPushButton('Pasar a presentación')
-        self.presentation_button.clicked.connect(self.toggle_presentation)
-        for button in (self.image_button,self.process_button,self.presentation_button):
+        for button in (self.image_button,self.process_button):
             actions.addWidget(button)
         layout.addLayout(actions)
         controls = QHBoxLayout()
@@ -115,12 +112,12 @@ class Window(QMainWindow):
         self.canvas = GraphCanvas(self.model, self.pick_node)
         left_layout.addWidget(self.canvas, 1)
         legend = QHBoxLayout()
+        self.legend_items = {}
         for state, label in [('unseen', 'Sin visitar'), ('frontier', 'Frontera'), ('visited', 'Visitado'),
                              ('current', 'Actual / arista'), ('path', 'Ruta final'), ('negative','Ciclo negativo')]:
             item = QLabel('  ' + label + '  ')
             item.setStyleSheet(f'background: {COLORS[state]}; color: #49453f; padding: 4px; border: 1px solid #d9d3ca; border-radius: 5px; font-size: 11px;')
-            if state == 'path':
-                self.route_legend = item
+            self.legend_items[state] = item
             legend.addWidget(item)
         left_layout.addLayout(legend)
         left_layout.addWidget(QLabel('Clic alternado: origen y destino. Anillo verde: origen · rosa: destino.'))
@@ -145,39 +142,7 @@ class Window(QMainWindow):
         self.history.setWordWrap(True)
         self.history.currentRowChanged.connect(self.jump)
         sidebar.addWidget(self.history, 2)
-        self.sidebar_stack = QStackedWidget()
-        self.sidebar_stack.addWidget(right)
-        self.presentation_panel = QWidget()
-        panel = QVBoxLayout(self.presentation_panel)
-        self.presentation_heading = QLabel('¿Qué ocurre aquí?')
-        self.presentation_heading.setObjectName('panelHeading')
-        panel.addWidget(self.presentation_heading)
-        self.presentation_step = QLabel()
-        self.presentation_step.setObjectName('message')
-        self.presentation_step.setWordWrap(True)
-        panel.addWidget(self.presentation_step)
-        self.presentation_values = QLabel()
-        self.presentation_values.setWordWrap(True)
-        panel.addWidget(self.presentation_values)
-        instructions = QLabel('1. Elige un origen y un destino.\n2. Avanza para ver una decisión.\n3. Retrocede para comparar.\n\ng: costo desde el origen.\nh: estimación restante (A*).\nf = g + h: prioridad (A*).\n\nAnillo verde: origen.\nAnillo rosa: destino.')
-        instructions.setWordWrap(True)
-        panel.addWidget(instructions)
-        panel.addWidget(QLabel('Semántica de colores'))
-        self.presentation_legend = QLabel()
-        self.presentation_legend.setWordWrap(True)
-        self.presentation_legend.setTextFormat(Qt.TextFormat.RichText)
-        panel.addWidget(self.presentation_legend)
-        self.presentation_distances = QLabel()
-        self.presentation_distances.setWordWrap(True)
-        panel.addWidget(self.presentation_distances)
-        panel.addStretch()
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setWidget(self.presentation_panel)
-        self.sidebar_stack.addWidget(scroll)
-        self.sidebar_stack.setMinimumWidth(390)
-        split.addWidget(self.sidebar_stack)
+        split.addWidget(right)
         split.setSizes([1050,410])
         layout.addWidget(split, 1)
         self.message = QLabel()
@@ -255,28 +220,6 @@ class Window(QMainWindow):
             self.export_job.cancel()
         event.accept()
 
-    def update_presentation(self,step):
-        self.presentation_heading.setText(self.algorithm.currentText())
-        self.presentation_step.setText(step.message)
-        values = f'Actual: {step.current if step.current is not None else "—"} · Vistos: {len(step.visited)}'
-        if step.pass_number: values += f'\nPasada: {step.pass_number}'
-        if step.heuristic is not None and step.current is not None:
-            node=step.current
-            values += f'\ng={fmt(step.distances[node])} · h={step.heuristic[node]:.3f} · f={step.distances[node]+step.heuristic[node]:.3f}'
-        if step.candidates: values += f'\nCaminos completos: {step.candidates}'
-        self.presentation_values.setText(values)
-        path_label='Mejor ruta provisional' if step.limited else 'Ruta encontrada'
-        labels=[('unseen','Sin visitar'),('frontier','Frontera / rama actual'),('visited','Visitado / visto'),
-                ('current','Actual / arista examinada'),('path',path_label),('negative','Afectado por ciclo negativo')]
-        self.presentation_legend.setText('<br>'.join(
-            f'<span style="background-color:{COLORS[key]};">&nbsp; {label} &nbsp;</span>' for key,label in labels))
-        self.presentation_distances.setText('Distancias g\n' + ' · '.join(f'{n}: {fmt(step.distances[n])}' for n in self.model.nodes))
-
-    def toggle_presentation(self):
-        self.presentation_mode=not self.presentation_mode
-        self.sidebar_stack.setCurrentIndex(1 if self.presentation_mode else 0)
-        self.presentation_button.setText('Volver al laboratorio' if self.presentation_mode else 'Pasar a presentación')
-
     def import_variant(self):
         path,_=QFileDialog.getOpenFileName(self,'Seleccionar variante ponderada','','Grafos JSON (*.json)')
         if not path: return
@@ -326,7 +269,7 @@ class Window(QMainWindow):
             step=self.steps[self.index]
             total=str(len(self.steps))+('+' if self.stream is not None else '')
             image=render_slide(self.model,step,int(self.source.currentText()),int(self.target.currentText()),
-                               self.algorithm.currentText(),self.graph_name,self.index,total,self.presentation_mode)
+                               self.algorithm.currentText(),self.graph_name,self.index,total)
             if not image.save(path,'PNG'): raise OSError('No se pudo guardar la imagen.')
             self.statusBar().showMessage(f'Imagen guardada: {path}',8000)
         except (OSError,ValueError) as error:
@@ -465,7 +408,10 @@ class Window(QMainWindow):
     def show_step(self, index):
         self.index = max(0, min(index, len(self.steps) - 1))
         step = self.steps[self.index]
-        self.route_legend.setText('  Mejor provisional  ' if step.limited else '  Ruta encontrada  ')
+        used=dict(legend_text(step,self.model))
+        for key,item in self.legend_items.items():
+            item.setVisible(key in used)
+            if key in used: item.setText('  '+used[key]+'  ')
         self.canvas.step = step
         self.canvas.update()
         self.message.setText(step.message)
@@ -497,7 +443,6 @@ class Window(QMainWindow):
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 item.setBackground(QColor(COLORS[node_state(step,node)]))
                 self.table.setItem(row, col, item)
-        self.update_presentation(step)
 
 STYLE = """
 QWidget { background: #ffffff; color: #393631; font-family: "Excalifont"; font-size: 14px; }

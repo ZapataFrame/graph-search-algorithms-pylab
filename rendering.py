@@ -2,7 +2,7 @@
 from math import cos, sin, pi, hypot, inf
 from pathlib import Path
 from PyQt6.QtCore import QPointF, QRectF, Qt
-from PyQt6.QtGui import QColor, QPen, QFont, QPainterPath, QPainter, QImage, QFontDatabase
+from PyQt6.QtGui import QColor, QPen, QFont, QPainterPath, QPainter, QImage, QFontDatabase, QFontMetricsF
 from PyQt6.QtWidgets import QWidget, QSizePolicy
 
 FONT = 'Excalifont'
@@ -71,6 +71,7 @@ def draw_graph(p, rect, model, step, source, target):
     labels = []
     p.save()
     p.setClipRect(rect)
+    draw_grid(p, rect)
     for edge in model.graph.es:
         u, v = (model.nodes[i] for i in edge.tuple)
         start, end = points[u], points[v]
@@ -110,22 +111,23 @@ def draw_graph(p, rect, model, step, source, target):
             center = start+(end-start)*(0.38 if u==7 else 0.62)
         elif {u,v} == {6,9}:
             center += QPointF(15,0)
+        if u != v: center += perpendicular*10
         labels.append((center,fmt(edge['weight']),highlight,stroke))
     p.setFont(QFont(FONT,11))
     for center, label, highlight, stroke in labels:
         w=p.fontMetrics().horizontalAdvance(label)+10
         box=QRectF(center.x()-w/2,center.y()-11,w,22)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor('#fff3df' if highlight else '#ffffff'))
-        p.drawRoundedRect(box,4,4)
         p.setPen(QColor(stroke if highlight else '#5a5752'))
         p.drawText(box,Qt.AlignmentFlag.AlignCenter,label)
     for node,center in points.items():
         state=node_state(step,node)
-        if node in (source,target):
-            p.setPen(QPen(QColor('#579577' if node==source else '#b77e9e'),1.8))
+        rings=[]
+        if node==source: rings.append((radius+5,'#37825e'))
+        if node==target: rings.append((radius+(11 if source==target else 5),'#b45088'))
+        for ring_radius,ring_color in rings:
+            p.setPen(QPen(QColor(ring_color),4.2))
             p.setBrush(Qt.BrushStyle.NoBrush)
-            p.drawPath(sketch_circle(center,radius+5,node+1))
+            p.drawPath(sketch_circle(center,ring_radius,node+1))
         p.setPen(QPen(QColor(INK),1.5))
         p.setBrush(QColor(COLORS[state]))
         p.drawPath(sketch_circle(center,radius,node))
@@ -144,22 +146,48 @@ def draw_graph(p, rect, model, step, source, target):
             label='g='+fmt(step.distances[node])
             w=p.fontMetrics().horizontalAdvance(label)+8
             box=QRectF(center.x()-w/2,center.y()+radius+6,w,19)
-            p.fillRect(box,QColor('#ffffff'))
             p.drawText(box,Qt.AlignmentFlag.AlignCenter,label)
     p.restore()
     return points
 
 
-def legend_text(step=None):
+def draw_grid(p,rect):
+    """Cuadrícula vectorial, sin imágenes externas; opacidad exacta del 15 %."""
+    p.save()
+    p.setClipRect(rect)
+    color=QColor('#619b88')
+    color.setAlphaF(0.15)
+    p.setPen(QPen(color,0.7))
+    x=rect.left()
+    while x<=rect.right():
+        p.drawLine(QPointF(x,rect.top()),QPointF(x,rect.bottom()))
+        x+=24
+    y=rect.top()
+    while y<=rect.bottom():
+        p.drawLine(QPointF(rect.left(),y),QPointF(rect.right(),y))
+        y+=24
+    p.restore()
+
+
+def legend_text(step=None,model=None):
+    used={node_state(step,n) for n in model.nodes} if model else set()
+    # Las aristas también pueden utilizar naranja/violeta aunque ningún nodo
+    # conserve ese color al finalizar el paso.
+    if step:
+        if step.active_edge is not None and step.active_edge not in step.path_edges:
+            used.add('current')
+        if set(step.branch_edges)-set(step.path_edges)-({step.active_edge} if step.active_edge is not None else set()):
+            used.add('frontier')
     path_label='Mejor provisional' if step and step.limited else 'Ruta encontrada'
-    return [('unseen','Sin visitar'),('frontier','Frontera / rama'),('visited','Visitado'),
-            ('current','Actual / arista'),('path',path_label),('negative','Ciclo negativo')]
+    entries=[('unseen','Sin visitar'),('frontier','Frontera / rama'),('visited','Visitado'),
+             ('current','Actual / arista'),('path',path_label),('negative','Ciclo negativo')]
+    return [(key,label) for key,label in entries if key in used]
 
 
-def draw_legend(p,rect,step=None):
+def draw_legend(p,rect,step=None,model=None):
     p.setFont(QFont(FONT,11))
     cursor=rect.left()
-    for key,label in legend_text(step):
+    for key,label in legend_text(step,model):
         p.setPen(QPen(QColor('#66625c'),1))
         p.setBrush(QColor(COLORS[key]))
         p.drawRoundedRect(QRectF(cursor,rect.center().y()-7,14,14),3,3)
@@ -169,41 +197,57 @@ def draw_legend(p,rect,step=None):
         cursor += p.fontMetrics().horizontalAdvance(label)+46
 
 
-def render_slide(model,step,source,target,algorithm,graph_name,index,total,presentation=True):
-    image=QImage(1800,1120,QImage.Format.Format_ARGB32)
+def explanation_blocks(step):
+    stats=f'Actual: {step.current if step.current is not None else "—"}\nVistos: {len(step.visited)} · Frontera: {len(step.frontier)}'
+    if step.pass_number: stats+=f'\nPasada: {step.pass_number}'
+    if step.heuristic and step.current is not None:
+        n=step.current
+        stats+=f'\ng = {fmt(step.distances[n])} · h = {step.heuristic[n]:.3f}\nf = {step.distances[n]+step.heuristic[n]:.3f}'
+    if step.candidates: stats+=f'\nCaminos completos: {step.candidates}'
+    if step.limited: stats+='\nResultado provisional: búsqueda incompleta.'
+    if step.negative_nodes: stats+='\nRojo: costo no finito por ciclo negativo.'
+    definitions='g: costo acumulado'
+    if step.heuristic is not None: definitions+=' · h: estimación restante · f = g + h'
+    definitions+='\nAnillo verde: origen\nAnillo rosa: destino'
+    return [('¿Qué ocurre aquí?',20),(step.message,15),(stats,12),(definitions,11)]
+
+
+def panel_layout(step,width):
+    blocks=[]
+    offset=20.0
+    for text,size in explanation_blocks(step):
+        font=QFont(FONT,size)
+        height=QFontMetricsF(font).boundingRect(QRectF(0,0,width-40,10000),
+                       int(Qt.TextFlag.TextWordWrap),text).height()+4
+        blocks.append((text,font,offset,height))
+        offset+=height+18
+    return blocks,offset+2
+
+
+def render_slide(model,step,source,target,algorithm,graph_name,index,total):
+    # QPainter dibuja directamente a escala 2x: no se amplía un bitmap previo.
+    image=QImage(3200,1800,QImage.Format.Format_ARGB32)
     image.fill(QColor('white'))
     p=QPainter(image)
+    p.scale(2,2)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
     p.setFont(QFont(FONT,25))
     p.setPen(QColor(INK))
-    p.drawText(QRectF(48,25,1650,55),Qt.AlignmentFlag.AlignLeft,algorithm+' / '+graph_name)
+    p.drawText(QRectF(32,20,1500,52),Qt.AlignmentFlag.AlignLeft,algorithm+' / '+graph_name)
     p.setFont(QFont(FONT,13))
-    p.drawText(QRectF(48,85,1650,35),f'Origen {source}   →   Destino {target}     ·     Paso {index+1} / {total}')
-    graph_rect=QRectF(30,140,1270 if presentation else 1740,840)
-    draw_graph(p,graph_rect,model,step,source,target)
-    if presentation:
-        panel=QRectF(1330,145,425,840)
-        p.setPen(QPen(QColor('#c2bab0'),1.3))
-        p.setBrush(QColor('#faf8f4'))
-        p.drawRoundedRect(panel,16,16)
+    p.drawText(QRectF(32,76,1500,35),f'Origen {source}   →   Destino {target}     ·     Paso {index+1} / {total}')
+    draw_graph(p,QRectF(24,128,1148,680),model,step,source,target)
+    blocks,height=panel_layout(step,360)
+    panel=QRectF(1208,128,360,height)
+    p.setPen(QPen(QColor('#c2bab0'),1.3))
+    p.setBrush(QColor('#faf8f4'))
+    p.drawRoundedRect(panel,14,14)
+    for text,font,offset,text_height in blocks:
         p.setPen(QColor(INK))
-        p.setFont(QFont(FONT,20))
-        p.drawText(QRectF(1355,175,370,45),'¿Qué ocurre aquí?')
-        p.setFont(QFont(FONT,16))
-        p.drawText(QRectF(1355,240,365,330),Qt.TextFlag.TextWordWrap,step.message)
-        p.setFont(QFont(FONT,13))
-        text=f'Actual: {step.current if step.current is not None else "—"}\nVistos: {len(step.visited)} · Frontera: {len(step.frontier)}'
-        if step.pass_number: text+=f'\nPasada: {step.pass_number}'
-        if step.heuristic and step.current is not None:
-            n=step.current
-            text+=f'\ng = {fmt(step.distances[n])}\nh = {step.heuristic[n]:.3f}\nf = {step.distances[n]+step.heuristic[n]:.3f}'
-        if step.limited: text+='\nResultado provisional: búsqueda incompleta.'
-        if step.negative_nodes: text+='\nRojo: costo no finito por ciclo negativo.'
-        p.drawText(QRectF(1355,590,365,210),Qt.TextFlag.TextWordWrap,text)
-        p.setFont(QFont(FONT,11))
-        p.drawText(QRectF(1355,850,365,90),Qt.TextFlag.TextWordWrap,
-                   'g: costo acumulado · h: estimación restante · f = g + h\nAnillo verde: origen · anillo rosa: destino')
-    draw_legend(p,QRectF(55,1030,1690,50),step)
+        p.setFont(font)
+        p.drawText(QRectF(panel.left()+20,panel.top()+offset,320,text_height),Qt.TextFlag.TextWordWrap,text)
+    draw_legend(p,QRectF(32,838,1500,42),step,model)
     p.end()
     return image
 

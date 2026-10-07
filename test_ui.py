@@ -9,11 +9,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 from PyQt6.QtWidgets import QApplication
-from PyQt6.QtGui import QImage,QFont
-from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QImage,QFont,QPainter,QColor
+from PyQt6.QtCore import Qt,QRectF
 from PyQt6.QtTest import QTest
 from main import Window,STYLE
-from rendering import load_font,FONT,render_slide
+from rendering import load_font,FONT,render_slide,legend_text,panel_layout,draw_grid
 from exporting import ExportJob
 from graph_data import build_graph
 from algorithms import ALGORITHMS,search,brute_force
@@ -41,7 +41,7 @@ class UITests(unittest.TestCase):
         self.app.processEvents()
         self.directory.cleanup()
 
-    def test_all_seven_algorithms_navigation_and_presentation(self):
+    def test_all_seven_algorithms_navigation(self):
         w=self.window
         self.assertEqual(self.font,'Excalifont')
         self.assertFalse(w.graph_choice.model().item(1).isEnabled())
@@ -54,12 +54,7 @@ class UITests(unittest.TestCase):
         w.algorithm.setCurrentText('A*')
         w.navigate(3)
         self.assertNotEqual(w.table.item(0,2).text(),'—')
-        QTest.mouseClick(w.presentation_button,Qt.MouseButton.LeftButton)
-        self.assertEqual(w.sidebar_stack.currentIndex(),1)
-        self.assertEqual(w.presentation_step.text(),w.steps[w.index].message)
-        self.assertIn('Frontera',w.presentation_legend.text())
-        QTest.mouseClick(w.presentation_button,Qt.MouseButton.LeftButton)
-        self.assertEqual(w.sidebar_stack.currentIndex(),0)
+        self.assertFalse(hasattr(w,'presentation_button'))
 
     def test_import_negative_graph_and_restore_original(self):
         w=self.window
@@ -81,21 +76,53 @@ class UITests(unittest.TestCase):
         self.assertIs(w.model,w.original_model)
         self.assertTrue(w.algorithm.model().item(0).isEnabled())
 
-    def test_export_current_png_with_and_without_presentation(self):
+    def test_export_current_high_resolution_png(self):
         w=self.window
         w.algorithm.setCurrentText('A*')
         w.navigate(len(w.steps)-1)
-        for presentation in (False,True):
-            if presentation: w.toggle_presentation()
-            path=self.root/f'export-{presentation}.png'
-            with patch('main.QFileDialog.getSaveFileName',return_value=(str(path),'')):
-                QTest.mouseClick(w.image_button,Qt.MouseButton.LeftButton)
-            image=QImage(str(path))
-            self.assertEqual((image.width(),image.height()),(1800,1120))
-            self.assertEqual(image.pixelColor(0,0).name(),'#ffffff')
-            # La vista y la exportación conservan el mismo paso.
-            self.assertTrue(w.steps[w.index].done)
-        self.assertNotEqual((self.root/'export-False.png').read_bytes(),(self.root/'export-True.png').read_bytes())
+        path=self.root/'export.png'
+        with patch('main.QFileDialog.getSaveFileName',return_value=(str(path),'')):
+            QTest.mouseClick(w.image_button,Qt.MouseButton.LeftButton)
+        image=QImage(str(path))
+        self.assertEqual((image.width(),image.height()),(3200,1800))
+        self.assertEqual(image.pixelColor(0,0).name(),'#ffffff')
+        self.assertTrue(w.steps[w.index].done)
+
+    def test_legend_only_contains_visible_states_and_panel_is_compact(self):
+        model=build_graph()
+        start=search(model,29,13)[0]
+        self.assertEqual({key for key,_ in legend_text(start,model)},{'unseen','frontier'})
+        end=search(model,29,29)[-1]
+        self.assertEqual({key for key,_ in legend_text(end,model)},{'unseen','path'})
+        self.assertNotIn('negative',dict(legend_text(end,model)))
+        blocks,height=panel_layout(start,360)
+        self.assertLess(height,400)
+        self.assertTrue(all(offset+block_height<height for _,_,offset,block_height in blocks))
+        w=self.window
+        w.target.setCurrentText('29')
+        w.navigate(len(w.steps)-1)
+        self.assertTrue(w.legend_items['negative'].isHidden())
+        self.assertFalse(w.legend_items['path'].isHidden())
+
+    def test_grid_is_subtle_and_origin_destination_rings_coexist(self):
+        image=QImage(80,80,QImage.Format.Format_ARGB32)
+        image.fill(QColor('white'))
+        painter=QPainter(image)
+        draw_grid(painter,QRectF(0,0,80,80))
+        painter.end()
+        pixel=image.pixelColor(24,10)
+        self.assertNotEqual(pixel.name(),'#ffffff')
+        self.assertGreater(pixel.red(),220)
+        model=build_graph()
+        step=search(model,29,29)[-1]
+        image=render_slide(model,step,29,29,'Dijkstra','Original',2,3)
+        # Ambos colores de anillos siguen presentes aunque origen=destino.
+        colors=set()
+        for y in range(250,550):
+            for x in range(40,350):
+                color=image.pixelColor(x,y).name()
+                if color in ('#37825e','#b45088'): colors.add(color)
+        self.assertEqual(colors,{'#37825e','#b45088'})
 
     def test_save_full_process_button_and_manifest(self):
         w=self.window

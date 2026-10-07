@@ -53,7 +53,7 @@ class ExportJob(QObject):
             return
         try:
             image=render_slide(self.model,step,self.source,self.target,self.algorithm,self.graph_name,
-                               self.count,self.total,True)
+                               self.count,self.total)
             path=self.folder/f'paso-{self.count+1:06d}.png'
             if not image.save(str(path),'PNG'):
                 raise OSError(f'No se pudo guardar {path}')

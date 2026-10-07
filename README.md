@@ -42,7 +42,7 @@ En Windows, activa el entorno con `.venv\Scripts\activate`. La instalación inic
 
 Elige **Origen A**, **Destino B** y un algoritmo. Usa **Reproducir / Pausar**, **Anterior / Siguiente**, la velocidad o el historial para recorrer los pasos. También puedes seleccionar los nodos con clics alternados sobre el grafo.
 
-**Exportar imagen** guarda el paso actual como PNG centrado y coloreado. **Guardar proceso** crea una carpeta con imágenes numeradas y `proceso.json`; puedes cancelar conservando lo exportado. **Pasar a presentación** muestra instrucciones, costos y semántica de colores en el panel derecho. En ese modo los PNG incluyen el panel.
+**Exportar imagen** guarda el paso actual como PNG centrado y coloreado. **Guardar proceso** crea una carpeta con imágenes numeradas y `proceso.json`; puedes cancelar conservando lo exportado. Los PNG se dibujan directamente en **3200 × 1800 píxeles**, con panel explicativo compacto y una leyenda que muestra solo los colores usados en el paso. El grafo lleva una cuadrícula al **15 %** de opacidad, pesos sin recuadros y aros de origen/destino reforzados.
 
 El tema usa fondo blanco, colores pastel, trazos de boceto y **Excalifont**, incluida con su [licencia SIL OFL](assets/fonts/LICENSE.txt).
 
@@ -75,7 +75,7 @@ Con el entorno activado:
 python -m unittest -v test_algorithms test_new_algorithms test_ui
 ```
 
-**23 pruebas (18 de algoritmos y 5 de interfaz/exportación)**: Dijkstra, A* y Bellman–Ford en los 900 pares de nodos, rutas de BFS y DFS, enumeración exhaustiva en grafos pequeños, aristas paralelas, casos donde el voraz falla y cortes explícitos por límite. Incluyen pesos negativos, ciclos negativos y el caso donde Dijkstra descubre primero costo 777 y después confirma costo mínimo 13.
+**25 pruebas (18 de algoritmos y 7 de interfaz/exportación)**: Dijkstra, A* y Bellman–Ford en los 900 pares de nodos, rutas de BFS y DFS, enumeración exhaustiva en grafos pequeños, aristas paralelas, casos donde el voraz falla y cortes explícitos por límite. Incluyen pesos negativos, ciclos negativos y el caso donde Dijkstra descubre primero costo 777 y después confirma costo mínimo 13.
 
 <details>
 <summary><strong>El grafo, los colores y el código</strong></summary>
