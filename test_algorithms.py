@@ -36,7 +36,7 @@ class AlgorithmTests(unittest.TestCase):
         self.assertEqual(self.model.graph.vcount(), 30)
         self.assertEqual(self.model.graph.ecount(), 63)
         self.assertEqual(sorted(w for a, b, w in EDGES if {a, b} == {12, 16}), [3, 16])
-        self.assertIn((66, 13, 777), EDGES)
+        self.assertIn((666, 13, 777), EDGES)
 
     def test_dijkstra_all_900_pairs(self):
         for source in self.model.nodes:
@@ -61,12 +61,12 @@ class AlgorithmTests(unittest.TestCase):
                 self.assert_route(source, target, search(self.model, source, target, ALGORITHMS[2])[-1])
 
     def test_dijkstra_does_not_stop_on_first_discovery(self):
-        steps = search(self.model, 66, 13)
+        steps = search(self.model, 666, 13)
         first_discovery = next(s for s in steps if s.distances[13] != inf)
         self.assertEqual(first_discovery.distances[13], 777)
         self.assertFalse(first_discovery.done)
         self.assertEqual(steps[-1].distances[13], 13)
-        self.assertEqual(steps[-1].path_nodes, (66, 12, 16, 13))
+        self.assertEqual(steps[-1].path_nodes, (666, 12, 16, 13))
 
     def test_identity_and_snapshot_isolation(self):
         steps = search(self.model, 29, 29)
@@ -150,7 +150,7 @@ class AdditionalAlgorithmTests(unittest.TestCase):
 
     def test_identity_disconnected_and_invalid_for_new_algorithms(self):
         model = self.model([], [0, 1])
-        for algorithm in ALGORITHMS[3:]:
+        for algorithm in ALGORITHMS[3:5]:
             self.assertEqual(search(model, 0, 0, algorithm)[-1].path_nodes, (0,))
             self.assertEqual(search(model, 0, 1, algorithm)[-1].path_nodes, ())
             with self.assertRaises(ValueError): search(model, 9, 0, algorithm)

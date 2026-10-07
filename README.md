@@ -12,15 +12,15 @@ Explora un grafo. Sigue cada decisión. Compara las rutas.
 
 </div>
 
-Laboratorio visual para aprender búsquedas en grafos ponderados. Selecciona origen y destino, reproduce la exploración y retrocede para ver cómo cambian las distancias y decisiones. Los cinco algoritmos están implementados manualmente en Python; igraph representa el grafo y PyQt6 dibuja la interfaz.
+Laboratorio visual para aprender búsquedas en grafos ponderados. Selecciona origen y destino, reproduce la exploración y retrocede para ver cómo cambian las distancias y decisiones. Los siete algoritmos están implementados manualmente en Python; igraph representa el grafo y PyQt6 dibuja la interfaz.
 
 <p align="center">
-  <img src="assets/interfaz.png" alt="Interfaz con Dijkstra: ruta de 66 a 13 resaltada, costos acumulados, tabla de nodos e historial de pasos" width="1200">
+  <img src="assets/interfaz.png" alt="Interfaz manuscrita con Dijkstra: ruta resaltada, costos acumulados, tabla de nodos e historial de pasos" width="1200">
 </p>
 
 <div align="center">
 
-**30 nodos · 63 aristas · 5 algoritmos**<br>
+**30 nodos · 63 aristas · 7 algoritmos**<br>
 Diego Eduardo Zapata Aguilar
 
 </div>
@@ -42,43 +42,53 @@ En Windows, activa el entorno con `.venv\Scripts\activate`. La instalación inic
 
 Elige **Origen A**, **Destino B** y un algoritmo. Usa **Reproducir / Pausar**, **Anterior / Siguiente**, la velocidad o el historial para recorrer los pasos. También puedes seleccionar los nodos con clics alternados sobre el grafo.
 
+**Exportar imagen** guarda el paso actual como PNG centrado y coloreado. **Guardar proceso** crea una carpeta con imágenes numeradas y `proceso.json`; puedes cancelar conservando lo exportado. **Pasar a presentación** muestra instrucciones, costos y semántica de colores en el panel derecho. En ese modo los PNG incluyen el panel.
+
+El tema usa fondo blanco, colores pastel, trazos de boceto y **Excalifont**, incluida con su [licencia SIL OFL](assets/fonts/LICENSE.txt).
+
 ## Algoritmos
 
 | Algoritmo | Cómo explora | Qué garantiza |
 | :--- | :--- | :--- |
 | **Dijkstra** | El menor costo acumulado de toda la frontera | Menor peso, con pesos no negativos |
+| **A*** | Prioriza `f = g + h`, con heurística consistente | Menor peso, con pesos no negativos |
+| **Bellman–Ford** | Relaja arcos y detecta ciclos negativos | Menor peso si ningún ciclo negativo afecta al destino |
 | **BFS** | Por niveles, con una cola | Menor número de aristas |
 | **DFS** | En profundidad, con una pila | Una ruta, sin garantía de mínimo |
-| **Fuerza bruta** | Todos los caminos sin repetir nodos | Menor peso al completar la enumeración |
+| **Fuerza bruta** | Todos los caminos sin repetir nodos | Menor peso entre caminos simples al completar la enumeración |
 | **Voraz local** | La arista más barata del nodo actual | Puede costar más o quedarse bloqueado |
 
-Dijkstra también es voraz: su elección usa el **costo acumulado**, mientras que el voraz local usa el **peso de una sola arista**. En este grafo, de **66 a 13**, Dijkstra obtiene costo **13** y el voraz local obtiene **19**.
+Dijkstra también es voraz: su elección usa el **costo acumulado**, mientras que el voraz local usa el **peso de una sola arista**. En este grafo, de **666 a 13**, Dijkstra obtiene costo **13** y el voraz local obtiene **19**.
 
 > [!IMPORTANT]
 > La fuerza bruta tiene un límite ajustable de **10000 pasos** por defecto. Si lo alcanza, la ruta es **provisional** y no garantiza el mínimo. Se puede pausar y avanzar paso a paso, o usar **Calcular resultado** para procesar por lotes.
+
+El selector incluye el grafo original y una **variante negativa pendiente**. No hay pesos inventados: se habilitará cuando se importe un JSON o exista `graphs/negative.json`. Consulta el [formato del grafo](graphs/README.md). Dijkstra y A* no están disponibles con pesos negativos. En un grafo no dirigido, una arista negativa permite un ciclo negativo de ida y vuelta; Bellman–Ford lo detecta y marca los nodos afectados con costo `−∞`.
+
+A* utiliza `h(v) = k · distancia(v, destino)`, donde `k` es el menor cociente peso/longitud de las aristas. Esto hace que la heurística sea consistente; no usa las coordenadas como un costo directo. Si `k = 0`, se reduce a Dijkstra.
 
 ## Pruebas
 
 Con el entorno activado:
 
 ```bash
-python -m unittest -v test_algorithms
+python -m unittest -v test_algorithms test_new_algorithms test_ui
 ```
 
-**11 pruebas**: Dijkstra en los 900 pares de nodos, rutas de BFS y DFS, enumeración exhaustiva en grafos pequeños, aristas paralelas, casos donde el voraz falla y cortes explícitos por límite. Incluyen el caso donde Dijkstra descubre primero costo 777 y después confirma costo mínimo 13.
+**23 pruebas (18 de algoritmos y 5 de interfaz/exportación)**: Dijkstra, A* y Bellman–Ford en los 900 pares de nodos, rutas de BFS y DFS, enumeración exhaustiva en grafos pequeños, aristas paralelas, casos donde el voraz falla y cortes explícitos por límite. Incluyen pesos negativos, ciclos negativos y el caso donde Dijkstra descubre primero costo 777 y después confirma costo mínimo 13.
 
 <details>
 <summary><strong>El grafo, los colores y el código</strong></summary>
 
 ### El grafo
 
-Transcripción manual de la [imagen original](assets/grafo-original.png). Es un **multigrafo no dirigido**: los cruces no crean nodos y se conservan las dos aristas entre 12 y 16, de pesos **3 y 16**, así como el peso **777** entre 66 y 13. Las coordenadas reproducen la composición de la imagen; no son una heurística del costo al destino.
+Transcripción manual de la [imagen original](assets/grafo-original.png). Es un **multigrafo no dirigido**: los cruces no crean nodos y se conservan las dos aristas entre 12 y 16, de pesos **3 y 16**, así como el peso **777** entre 666 y 13. La etiqueta 66 se actualizó a **666** siguiendo la corrección del proyecto. Las coordenadas reproducen la composición de la imagen; no son una heurística del costo al destino.
 
 Las conexiones centrales son `7–6 = 10`, `7–1 = 20`, `6–15 = 3`, `10–1 = 5` y `14–4 = 8`. Se pueden revisar o corregir en `graph_data.py`.
 
 ### Leer la animación
 
-**Violeta:** frontera o rama actual. **Azul:** visitado. **Naranja:** nodo actual y arista examinada. **Verde:** ruta encontrada; si hay un corte por límite, mejor ruta provisional. Los anillos verde y rosa indican origen y destino, y `d=` muestra el costo acumulado.
+**Violeta:** frontera o rama actual. **Azul:** visitado. **Naranja:** nodo actual y arista examinada. **Verde:** ruta encontrada; si hay un corte por límite, mejor ruta provisional. Los anillos verde y rosa indican origen y destino, y `g=` muestra el costo acumulado.
 
 Dijkstra termina cuando selecciona el destino para visitarlo, no cuando lo descubre por primera vez. Las distancias de otros nodos pueden quedar sin confirmar. En fuerza bruta, costos y padres pertenecen a la rama mostrada; un nodo visto puede volver a explorarse en otra rama. El `+` del total indica que faltan pasos por generar. Reiniciar fuerza bruta comienza la enumeración de nuevo.
 
@@ -88,6 +98,8 @@ Dijkstra termina cuando selecciona el destino para visitarlo, no cuando lo descu
 | :--- | :--- |
 | [`main.py`](main.py) | Interfaz, dibujo y controles de animación |
 | [`algorithms.py`](algorithms.py) | Cinco algoritmos e instantáneas independientes |
+| [`rendering.py`](rendering.py) | Trazos, fuente y lienzos de exportación |
+| [`exporting.py`](exporting.py) | Guardado incremental y manifiesto del proceso |
 | [`graph_data.py`](graph_data.py) | Nodos, pesos, posiciones y representación igraph |
 | [`test_algorithms.py`](test_algorithms.py) | Pruebas de rutas y casos límite |
 

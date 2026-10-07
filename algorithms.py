@@ -6,17 +6,19 @@ implementa la cola de prioridad y deque la cola FIFO.
 from collections import deque
 from dataclasses import dataclass
 from heapq import heappop, heappush
-from math import inf
+from math import inf, hypot
 from graph_data import GraphModel
 
 ALGORITHMS = ('Dijkstra', 'BFS · anchura', 'DFS · profundidad',
-              'Fuerza bruta · exhaustiva', 'Voraz · arista mínima')
+              'Fuerza bruta · exhaustiva', 'Voraz · arista mínima', 'A*', 'Bellman–Ford')
 
 DESCRIPTIONS = {
+    ALGORITHMS[5]: 'A*: prioriza f = g + h; h geométrica escalada y consistente.',
+    ALGORITHMS[6]: 'Bellman–Ford: relaja los arcos y detecta ciclos negativos.',
     ALGORITHMS[0]: 'Menor costo acumulado pendiente; óptimo con pesos ≥ 0.',
     ALGORITHMS[1]: 'Menor número de aristas; no garantiza menor peso.',
     ALGORITHMS[2]: 'Explora en profundidad; no garantiza una ruta mínima.',
-    ALGORITHMS[3]: 'Enumera caminos sin ciclos; óptimo solo al completar todos.',
+    ALGORITHMS[3]: 'Compara caminos simples; mínimo simple al completar todos.',
     ALGORITHMS[4]: 'Elige la arista local más barata; puede fallar o costar más.',
 }
 
@@ -36,6 +38,9 @@ class Step:
     candidates: int = 0
     branch_nodes: tuple[int, ...] = ()
     branch_edges: tuple[int, ...] = ()
+    heuristic: dict[int, float] | None = None
+    pass_number: int = 0
+    negative_nodes: frozenset[int] = frozenset()
 
 
 def search(model: GraphModel, source: int, target: int, algorithm: str = 'Dijkstra',
@@ -44,6 +49,12 @@ def search(model: GraphModel, source: int, target: int, algorithm: str = 'Dijkst
         raise ValueError('El origen y el destino deben existir en el grafo.')
     if algorithm not in ALGORITHMS:
         raise ValueError('Algoritmo desconocido.')
+    if algorithm in ('Dijkstra', 'A*') and model.has_negative_weights:
+        raise ValueError(f'{algorithm} requiere pesos no negativos. Usa Bellman–Ford.')
+    if algorithm == ALGORITHMS[5]:
+        return a_star(model, source, target)
+    if algorithm == ALGORITHMS[6]:
+        return bellman_ford(model, source, target)
     if algorithm == ALGORITHMS[3]:
         return list(brute_force(model, source, target, max_steps))
     if algorithm == ALGORITHMS[4]:
@@ -242,7 +253,152 @@ def brute_force(model: GraphModel, source: int, target: int, max_steps: int | No
                    f'{result} Exploración incompleta: NO se garantiza el mínimo.')
     elif best_path:
         message = (f'Exploración exhaustiva terminada: {candidates} caminos completos. '
-                   f'Costo mínimo {best_cost:g}: ' + ' → '.join(map(str, best_path)))
+                   f'Menor costo de camino simple {best_cost:g}: ' + ' → '.join(map(str, best_path)))
     else:
         message = f'Exploración exhaustiva terminada. No existe una ruta entre {source} y {target}.'
     yield snapshot(message, done=True, limited=limited)
+
+
+def reconstruct(parents, source, target):
+    path, edge_path, seen = [target], [], {target}
+    while path[-1] != source:
+        if path[-1] not in parents:
+            return (), ()
+        parent, edge_id = parents[path[-1]]
+        if parent in seen:
+            raise ValueError('No se puede reconstruir una ruta finita con un ciclo en sus padres.')
+        path.append(parent)
+        edge_path.append(edge_id)
+        seen.add(parent)
+    return tuple(reversed(path)), tuple(reversed(edge_path))
+
+
+def consistent_heuristic(model, target):
+    """h(v)=k*distancia(v,t), k=min(w(u,v)/longitud(u,v)).
+
+    Por desigualdad triangular h(u) <= w(u,v)+h(v). Un peso cero puede
+    hacer k=0: A* se reduce correctamente a Dijkstra. No usa rutas precalculadas.
+    """
+    if model.has_negative_weights:
+        raise ValueError('A* requiere pesos no negativos.')
+    positions = model.positions
+    ratios = []
+    for u in model.nodes:
+        for v, weight, _ in model.adjacency[u]:
+            length = hypot(positions[u][0]-positions[v][0], positions[u][1]-positions[v][1])
+            if length > 0:
+                ratios.append(weight / length)
+    # Reducir mínimamente el factor evita sobreestimación por redondeo flotante.
+    factor = min(ratios, default=0) * (1 - 1e-12)
+    tx, ty = positions[target]
+    return {n: factor * hypot(x-tx, y-ty) for n, (x, y) in positions.items()}
+
+
+def a_star(model, source, target):
+    h = consistent_heuristic(model, target)
+    costs = {n: inf for n in model.nodes}
+    costs[source] = 0
+    parents, visited, frontier, steps = {}, set(), {source}, []
+    queue = [(h[source], 0, source)]
+
+    def snapshot(message, current=None, edge=None, done=False, path=(), path_edges=()):
+        steps.append(Step(message, current, frozenset(visited), frozenset(frontier),
+                          costs.copy(), parents.copy(), edge, path, path_edges, done,
+                          heuristic=h.copy()))
+
+    snapshot(f'A*: comenzar en {source}; f = g + h. h({target}) = 0.')
+    while queue:
+        f, g, node = heappop(queue)
+        if node in visited or g != costs[node]:
+            continue
+        visited.add(node)
+        frontier.discard(node)
+        snapshot(f'Elegir {node}: g={g:g}, h={h[node]:.3f}, f={f:.3f}; menor f pendiente.', node)
+        if node == target:
+            path, edges = reconstruct(parents, source, target)
+            snapshot(f'A*: destino confirmado. Costo mínimo {g:g}: '
+                     + ' → '.join(map(str, path)), node, done=True, path=path, path_edges=edges)
+            return steps
+        for neighbor, weight, edge_id in model.adjacency[node]:
+            candidate = g + weight
+            old = costs[neighbor]
+            improve = candidate < old
+            if improve:
+                costs[neighbor] = candidate
+                parents[neighbor] = (node, edge_id)
+                frontier.add(neighbor)
+                visited.discard(neighbor)
+                heappush(queue, (candidate + h[neighbor], candidate, neighbor))
+            before = '∞' if old == inf else f'{old:g}'
+            snapshot(f'Relajar {node} → {neighbor}: ¿{candidate:g} < {before}? '
+                     + (f'Sí. g={candidate:g}, h={h[neighbor]:.3f}, f={candidate+h[neighbor]:.3f}.'
+                        if improve else 'No. Mantener costo.'), node, edge_id)
+    snapshot(f'A*: no existe ruta de {source} a {target}.', done=True)
+    return steps
+
+
+def bellman_ford(model, source, target):
+    costs = {n: inf for n in model.nodes}
+    costs[source] = 0
+    parents, visited, steps = {}, set(), []
+    arcs = [(u, v, w, e) for u in model.nodes for v, w, e in model.adjacency[u]]
+
+    def snapshot(message, current=None, edge=None, iteration=0, done=False, path=(), edges=(), negative=frozenset()):
+        frontier = frozenset(n for n in model.nodes if costs[n] != inf and n not in visited)
+        steps.append(Step(message, current, frozenset(visited), frontier, costs.copy(),
+                          parents.copy(), edge, path, edges, done, pass_number=iteration,
+                          negative_nodes=negative))
+
+    snapshot(f'Bellman–Ford: origen {source}. Se permiten pesos negativos.')
+    for iteration in range(1, len(model.nodes)):
+        changed = False
+        visited.clear()
+        snapshot(f'Pasada {iteration}/{len(model.nodes)-1}: recorrer todos los arcos.', iteration=iteration)
+        for u, v, weight, edge_id in arcs:
+            candidate = costs[u] + weight
+            old = costs[v]
+            improve = costs[u] != inf and candidate < old
+            if improve:
+                costs[v] = candidate
+                parents[v] = (u, edge_id)
+                changed = True
+            if costs[u] != inf:
+                visited.add(u)
+            before = '∞' if old == inf else f'{old:g}'
+            total = '∞' if candidate == inf else f'{candidate:g}'
+            snapshot(f'Pasada {iteration}, relajar {u} → {v}, peso {weight}: '
+                     f'¿{total} < {before}? ' + ('Sí, actualizar.' if improve else 'No, conservar.'),
+                     u, edge_id, iteration)
+        if not changed:
+            snapshot('Ninguna mejora en esta pasada: las distancias finitas quedan estables.', iteration=iteration)
+            break
+    affected = set()
+    for u, v, weight, edge_id in arcs:
+        unstable = costs[u] != inf and costs[u] + weight < costs[v]
+        snapshot(f'Comprobar ciclo negativo en {u} → {v}: '
+                 + ('todavía mejora; marcar destinos afectados.' if unstable else 'sin mejora.'), u, edge_id)
+        if unstable:
+            affected.add(v)
+    pending = list(affected)
+    while pending:
+        node = pending.pop()
+        for neighbor, _, _ in model.adjacency[node]:
+            if neighbor not in affected:
+                affected.add(neighbor)
+                pending.append(neighbor)
+    for node in affected:
+        costs[node] = -inf
+        parents.pop(node, None)
+    negative = frozenset(affected)
+    if target in affected:
+        snapshot('Ciclo negativo alcanzable que afecta al destino: costo −∞. '
+                 'No existe un camino mínimo finito.', target, done=True, negative=negative)
+    elif costs[target] == inf:
+        snapshot(f'No existe ruta de {source} a {target}.', done=True, negative=negative)
+    else:
+        path, edges = reconstruct(parents, source, target)
+        suffix = ' Hay un ciclo negativo en otra rama; no afecta a este destino.' if affected else ''
+        snapshot(f'Bellman–Ford: costo mínimo {costs[target]:g}: '
+                 + ' → '.join(map(str, path)) + suffix, target, done=True,
+                 path=path, edges=edges, negative=negative)
+    return steps

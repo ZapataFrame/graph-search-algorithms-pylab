@@ -4,6 +4,9 @@ Las coordenadas conservan la distribución original. Los índices internos de
 igraph no son las etiquetas numéricas de los nodos.
 """
 from dataclasses import dataclass
+import json
+from math import isfinite
+from pathlib import Path
 import igraph as ig
 
 POSITIONS = {
@@ -42,23 +45,64 @@ class GraphModel:
     adjacency: dict[int, list[tuple[int, int, int]]]
 
 
-def build_graph() -> GraphModel:
-    nodes = tuple(sorted(POSITIONS))
+    @property
+    def positions(self):
+        if 'position' in self.graph.vs.attributes():
+            return {n: tuple(self.graph.vs[i]['position']) for i, n in enumerate(self.nodes)}
+        return {n: POSITIONS.get(n, (80 + (i % 6) * 200, 80 + (i // 6) * 140))
+                for i, n in enumerate(self.nodes)}
+
+    @property
+    def has_negative_weights(self):
+        return any(edge['weight'] < 0 for edge in self.graph.es)
+
+
+def build_graph(edges=None, positions=None, directed=False) -> GraphModel:
+    positions = POSITIONS if positions is None else positions
+    edges = EDGES if edges is None else edges
+    if not positions:
+        raise ValueError('El grafo debe contener nodos.')
+    if not all(type(n) is int for n in positions):
+        raise ValueError('Las etiquetas de los nodos deben ser enteros.')
+    for position in positions.values():
+        if len(position) != 2 or not all(type(x) in (int, float) and isfinite(x) for x in position):
+            raise ValueError('Cada posición debe tener dos coordenadas finitas.')
+    nodes = tuple(sorted(positions))
     index = {node: i for i, node in enumerate(nodes)}
-    graph = ig.Graph(n=len(nodes), edges=[(index[a], index[b]) for a, b, _ in EDGES], directed=False)
+    for edge in edges:
+        if len(edge) != 3:
+            raise ValueError('Cada arista debe indicar origen, destino y peso.')
+        a, b, weight = edge
+        if a not in index or b not in index:
+            raise ValueError('Una arista hace referencia a un nodo inexistente.')
+        if type(weight) not in (int, float) or not isfinite(weight):
+            raise ValueError('Los pesos deben ser números finitos.')
+    graph = ig.Graph(n=len(nodes), edges=[(index[a], index[b]) for a, b, _ in edges], directed=directed)
     graph.vs['name'] = [str(n) for n in nodes]
     graph.vs['label'] = list(nodes)
-    graph.vs['position'] = [POSITIONS[n] for n in nodes]
-    graph.es['weight'] = [w for _, _, w in EDGES]
+    graph.vs['position'] = [positions[n] for n in nodes]
+    graph.es['weight'] = [w for _, _, w in edges]
     adjacency = {node: [] for node in nodes}
-    # igraph almacena el multigrafo; los algoritmos recorren esta lista en Python.
     for edge in graph.es:
         a, b = (nodes[i] for i in edge.tuple)
-        weight = edge['weight']
-        if weight < 0:
-            raise ValueError('Dijkstra requiere pesos no negativos.')
-        adjacency[a].append((b, weight, edge.index))
-        adjacency[b].append((a, weight, edge.index))
+        adjacency[a].append((b, edge['weight'], edge.index))
+        if not directed and a != b:
+            adjacency[b].append((a, edge['weight'], edge.index))
     for neighbors in adjacency.values():
         neighbors.sort(key=lambda item: (item[0], item[1], item[2]))
     return GraphModel(graph, nodes, adjacency)
+
+
+def load_graph(path: str | Path) -> GraphModel:
+    """JSON: directed (bool), nodes [{id, x, y}], edges [[a, b, peso]]."""
+    data = json.loads(Path(path).read_text(encoding='utf-8'))
+    if not isinstance(data, dict) or type(data.get('directed')) is not bool:
+        raise ValueError('El JSON debe especificar directed: true o false.')
+    try:
+        node_list = data['nodes']
+        positions = {node['id']: (node['x'], node['y']) for node in node_list}
+        if len(positions) != len(node_list):
+            raise ValueError('Hay nodos duplicados.')
+        return build_graph(data['edges'], positions, data['directed'])
+    except (KeyError, TypeError) as error:
+        raise ValueError('Formato inválido: se requieren nodes y edges.') from error

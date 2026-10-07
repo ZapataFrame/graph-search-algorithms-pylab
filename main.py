@@ -2,152 +2,82 @@
 import sys
 from math import inf
 from pathlib import Path
-from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF
-from PyQt6.QtGui import QColor, QPainter, QPen, QFont, QPainterPath
+from datetime import datetime
+from uuid import uuid4
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QComboBox, QSlider, QSplitter, QTableWidget, QTableWidgetItem,
-    QHeaderView, QListWidget, QAbstractItemView, QFrame, QSizePolicy, QSpinBox,
+    QHeaderView, QListWidget, QAbstractItemView, QFrame, QSpinBox,
+    QFileDialog, QMessageBox, QStackedWidget, QScrollArea, QProgressDialog,
 )
-from graph_data import build_graph, POSITIONS
+from graph_data import build_graph, load_graph
 from algorithms import search, brute_force, ALGORITHMS, DESCRIPTIONS
 
-BG = '#0c1322'
-COLORS = {'unseen': '#334259', 'frontier': '#9178ee', 'visited': '#268fbd',
-          'current': '#ffb454', 'path': '#40d9ac', 'edge': '#52627a'}
-
-class GraphCanvas(QWidget):
-    def __init__(self, model, choose):
-        super().__init__()
-        self.model, self.choose = model, choose
-        self.step = None
-        self.source, self.target = 29, 13
-        self.points = {}
-        self.setMinimumSize(640, 440)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.setMouseTracking(True)
-
-    def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.fillRect(self.rect(), QColor(BG))
-        scale = min((self.width() - 100) / 1387, (self.height() - 110) / 797)
-        ox, oy = (self.width() - 1387 * scale) / 2, (self.height() - 797 * scale) / 2
-        self.points = {n: QPointF(ox + x * scale, oy + y * scale) for n, (x, y) in POSITIONS.items()}
-        s = self.step
-        route = set(s.path_edges) if s else set()
-        branch = set(s.branch_edges) if s else set()
-        p.setFont(QFont('Sans Serif', 9))
-        labels = []
-        for edge in self.model.graph.es:
-            a, b = (self.model.nodes[i] for i in edge.tuple)
-            start, end = self.points[a], self.points[b]
-            dx, dy = end.x() - start.x(), end.y() - start.y()
-            # Separar las aristas paralelas, conservando la identidad de cada una.
-            bend = (30 if edge['weight'] == 16 else -30) * scale if {a, b} == {12, 16} else 0
-            length = max((dx * dx + dy * dy) ** 0.5, 1)
-            center = (start + end) / 2 + QPointF(-dy / length * bend, dx / length * bend)
-            active = s and edge.index == s.active_edge
-            color = COLORS['path'] if edge.index in route else COLORS['current'] if active else COLORS['frontier'] if edge.index in branch else COLORS['edge']
-            p.setPen(QPen(QColor(color), 3.5 if edge.index in route or edge.index in branch or active else 1.25))
-            path = QPainterPath(start)
-            if bend:
-                path.quadTo(center + (center - (start + end) / 2), end)
-            else:
-                path.lineTo(end)
-            p.drawPath(path)
-            # Las etiquetas se pintan después de todas las líneas.
-            if {a, b} == {7, 1}:
-                center = start + (end - start) * (0.38 if a == 7 else 0.62)
-            elif {a, b} == {6, 9}:
-                center += QPointF(15, 0)
-            labels.append((center, str(edge['weight']), color, active or edge.index in route))
-        for center, label, color, emphasized in labels:
-            width = max(22, p.fontMetrics().horizontalAdvance(label) + 12)
-            box = QRectF(center.x() - width / 2, center.y() - 10, width, 20)
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor('#142034'))
-            p.drawRoundedRect(box, 5, 5)
-            p.setPen(QColor(color if emphasized else '#c6d2e3'))
-            p.drawText(box, Qt.AlignmentFlag.AlignCenter, label)
-        radius = max(15, min(22, scale * 23))
-        for node, point in self.points.items():
-            state = 'unseen'
-            if s:
-                if node in s.frontier: state = 'frontier'
-                if node in s.visited: state = 'visited'
-                if node in s.branch_nodes: state = 'frontier'
-                if node == s.current: state = 'current'
-                if node in s.path_nodes: state = 'path'
-            color = QColor(COLORS[state])
-            if node in (self.source, self.target):
-                p.setBrush(Qt.BrushStyle.NoBrush)
-                p.setPen(QPen(QColor('#40d9ac' if node == self.source else '#f28ca9'), 2))
-                p.drawEllipse(point, radius + 5, radius + 5)
-            p.setPen(QPen(color.lighter(130), 1.5))
-            p.setBrush(color)
-            p.drawEllipse(point, radius, radius)
-            p.setFont(QFont('Sans Serif', 10, QFont.Weight.Bold))
-            p.setPen(QColor('#0c1322' if state in ('current', 'path') else '#ffffff'))
-            p.drawText(QRectF(point.x() - radius, point.y() - radius, radius * 2, radius * 2),
-                       Qt.AlignmentFlag.AlignCenter, str(node))
-            if s and s.distances[node] != inf:
-                label = f'd={s.distances[node]:g}'
-                p.setFont(QFont('Sans Serif', 8))
-                width = p.fontMetrics().horizontalAdvance(label) + 10
-                box = QRectF(point.x() - width / 2, point.y() + radius + 6, width, 17)
-                p.setPen(Qt.PenStyle.NoPen)
-                p.setBrush(QColor(BG))
-                p.drawRoundedRect(box, 4, 4)
-                p.setPen(QColor('#e1e9f5'))
-                p.drawText(box, Qt.AlignmentFlag.AlignCenter, label)
-        p.end()
-
-    def mousePressEvent(self, event):
-        if event.button() != Qt.MouseButton.LeftButton:
-            return
-        point = event.position()
-        for node, center in self.points.items():
-            if (center.x() - point.x()) ** 2 + (center.y() - point.y()) ** 2 < 28 ** 2:
-                self.choose(node)
-                break
-
-    def mouseMoveEvent(self, event):
-        for node, center in self.points.items():
-            if (center.x() - event.position().x()) ** 2 + (center.y() - event.position().y()) ** 2 < 26 ** 2:
-                cost = self.step.distances[node] if self.step else inf
-                text = '∞' if cost == inf else f'{cost:g}'
-                edges = ', '.join(f'{n} (peso {w})' for n, w, _ in self.model.adjacency[node])
-                self.setToolTip(f'Nodo {node} · distancia {text}\nVecinos: {edges}')
-                self.setCursor(Qt.CursorShape.PointingHandCursor)
-                return
-        self.setToolTip('')
-        self.setCursor(Qt.CursorShape.ArrowCursor)
+from rendering import GraphCanvas, COLORS, FONT, load_font, render_slide, fmt, node_state
+from exporting import ExportJob
 
 class Window(QMainWindow):
     def __init__(self):
         super().__init__()
         self.model = build_graph()
+        self.original_model = self.model
+        self.negative_model = None
+        self.graph_name = 'Original'
+        self.presentation_mode = False
+        self.export_job = None
+        negative_path = Path(__file__).parent / 'graphs/negative.json'
+        self.negative_error = None
+        if negative_path.exists():
+            try:
+                self.negative_model = load_graph(negative_path)
+            except (ValueError, OSError) as error:
+                self.negative_error = str(error)
         self.steps, self.index = [], 0
         self.click_source = True
         self.stream = None
         self.fast_mode = False
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.advance)
-        self.setWindowTitle('Graph Studio · Dijkstra | Diego Eduardo Zapata Aguilar')
+        self.setWindowTitle('PyLab · cuaderno de grafos')
         self.resize(1500, 960)
         root = QWidget()
         self.setCentralWidget(root)
         layout = QVBoxLayout(root)
         layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(14)
-        title = QLabel('GRAPH STUDIO   /   Laboratorio de rutas')
+        title = QLabel('PyLab / cuaderno de grafos')
         title.setObjectName('title')
         layout.addWidget(title)
-        subtitle = QLabel(f'Diego Eduardo Zapata Aguilar   •   {self.model.graph.vcount()} nodos   /   '
+        self.subtitle = QLabel(f'Diego Eduardo Zapata Aguilar   •   {self.model.graph.vcount()} nodos   /   '
                           f'{self.model.graph.ecount()} aristas   /   Grafo ponderado no dirigido')
-        subtitle.setObjectName('muted')
-        layout.addWidget(subtitle)
+        self.subtitle.setObjectName('muted')
+        layout.addWidget(self.subtitle)
+        actions = QHBoxLayout()
+        self.graph_choice = QComboBox()
+        self.graph_choice.addItems(['Original', 'Valores negativos · pendiente'])
+        self.graph_choice.model().item(1).setEnabled(self.negative_model is not None)
+        if self.negative_error:
+            self.graph_choice.setItemText(1,'Variante JSON inválida')
+            self.graph_choice.setToolTip(self.negative_error)
+        if self.negative_model is not None:
+            self.graph_choice.setItemText(1,'Valores negativos')
+        actions.addWidget(QLabel('Grafo'))
+        actions.addWidget(self.graph_choice)
+        self.import_button = QPushButton('Importar variante JSON')
+        self.import_button.clicked.connect(self.import_variant)
+        actions.addWidget(self.import_button)
+        actions.addStretch()
+        self.image_button = QPushButton('Exportar imagen')
+        self.image_button.clicked.connect(self.export_image)
+        self.process_button = QPushButton('Guardar proceso')
+        self.process_button.clicked.connect(self.export_process)
+        self.presentation_button = QPushButton('Pasar a presentación')
+        self.presentation_button.clicked.connect(self.toggle_presentation)
+        for button in (self.image_button,self.process_button,self.presentation_button):
+            actions.addWidget(button)
+        layout.addLayout(actions)
         controls = QHBoxLayout()
         self.source, self.target, self.algorithm = QComboBox(), QComboBox(), QComboBox()
         for combo in (self.source, self.target):
@@ -156,7 +86,7 @@ class Window(QMainWindow):
         self.source.setCurrentText('29')
         self.target.setCurrentText('13')
         self.algorithm.addItems(ALGORITHMS)
-        self.algorithm.setMinimumWidth(190)
+        self.algorithm.setMinimumWidth(220)
         for label, combo in [('Origen A', self.source), ('Destino B', self.target), ('Algoritmo', self.algorithm)]:
             controls.addWidget(QLabel(label))
             controls.addWidget(combo)
@@ -186,10 +116,9 @@ class Window(QMainWindow):
         left_layout.addWidget(self.canvas, 1)
         legend = QHBoxLayout()
         for state, label in [('unseen', 'Sin visitar'), ('frontier', 'Frontera'), ('visited', 'Visitado'),
-                             ('current', 'Actual / arista examinada'), ('path', 'Ruta final')]:
-            item = QLabel('● ' + label)
-            legend_color = '#92a7c4' if state == 'unseen' else COLORS[state]
-            item.setStyleSheet(f'color: {legend_color}; font-size: 11px;')
+                             ('current', 'Actual / arista'), ('path', 'Ruta final'), ('negative','Ciclo negativo')]:
+            item = QLabel('  ' + label + '  ')
+            item.setStyleSheet(f'background: {COLORS[state]}; color: #49453f; padding: 4px; border: 1px solid #d9d3ca; border-radius: 5px; font-size: 11px;')
             if state == 'path':
                 self.route_legend = item
             legend.addWidget(item)
@@ -197,15 +126,15 @@ class Window(QMainWindow):
         left_layout.addWidget(QLabel('Clic alternado: origen y destino. Anillo verde: origen · rosa: destino.'))
         split.addWidget(left)
         right = QWidget()
-        right.setMinimumWidth(310)
+        right.setMinimumWidth(390)
         sidebar = QVBoxLayout(right)
         sidebar.setContentsMargins(12, 0, 0, 0)
         sidebar.addWidget(QLabel('ESTADO DE LA BÚSQUEDA'))
         self.stats = QLabel()
         self.stats.setObjectName('stats')
         sidebar.addWidget(self.stats)
-        self.table = QTableWidget(len(self.model.nodes), 4)
-        self.table.setHorizontalHeaderLabels(['Nodo', 'Costo', 'Padre', 'Estado'])
+        self.table = QTableWidget(len(self.model.nodes), 6)
+        self.table.setHorizontalHeaderLabels(['Nodo','g','h','f','Padre','Estado'])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table.verticalHeader().hide()
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -216,8 +145,40 @@ class Window(QMainWindow):
         self.history.setWordWrap(True)
         self.history.currentRowChanged.connect(self.jump)
         sidebar.addWidget(self.history, 2)
-        split.addWidget(right)
-        split.setSizes([1080, 350])
+        self.sidebar_stack = QStackedWidget()
+        self.sidebar_stack.addWidget(right)
+        self.presentation_panel = QWidget()
+        panel = QVBoxLayout(self.presentation_panel)
+        self.presentation_heading = QLabel('¿Qué ocurre aquí?')
+        self.presentation_heading.setObjectName('panelHeading')
+        panel.addWidget(self.presentation_heading)
+        self.presentation_step = QLabel()
+        self.presentation_step.setObjectName('message')
+        self.presentation_step.setWordWrap(True)
+        panel.addWidget(self.presentation_step)
+        self.presentation_values = QLabel()
+        self.presentation_values.setWordWrap(True)
+        panel.addWidget(self.presentation_values)
+        instructions = QLabel('1. Elige un origen y un destino.\n2. Avanza para ver una decisión.\n3. Retrocede para comparar.\n\ng: costo desde el origen.\nh: estimación restante (A*).\nf = g + h: prioridad (A*).\n\nAnillo verde: origen.\nAnillo rosa: destino.')
+        instructions.setWordWrap(True)
+        panel.addWidget(instructions)
+        panel.addWidget(QLabel('Semántica de colores'))
+        self.presentation_legend = QLabel()
+        self.presentation_legend.setWordWrap(True)
+        self.presentation_legend.setTextFormat(Qt.TextFormat.RichText)
+        panel.addWidget(self.presentation_legend)
+        self.presentation_distances = QLabel()
+        self.presentation_distances.setWordWrap(True)
+        panel.addWidget(self.presentation_distances)
+        panel.addStretch()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(self.presentation_panel)
+        self.sidebar_stack.addWidget(scroll)
+        self.sidebar_stack.setMinimumWidth(390)
+        split.addWidget(self.sidebar_stack)
+        split.setSizes([1050,410])
         layout.addWidget(split, 1)
         self.message = QLabel()
         self.message.setWordWrap(True)
@@ -255,7 +216,10 @@ class Window(QMainWindow):
         for combo in (self.source, self.target, self.algorithm):
             combo.currentIndexChanged.connect(self.prepare)
         self.limit.valueChanged.connect(self.prepare)
+        self.graph_choice.currentIndexChanged.connect(self.select_graph)
         self.prepare()
+        if self.negative_error:
+            self.statusBar().showMessage("Variante no cargada: " + self.negative_error)
 
     def prepare(self):
         self.pause()
@@ -271,7 +235,9 @@ class Window(QMainWindow):
         self.limit.setVisible(brute)
         self.limit_label.setVisible(brute)
         self.end.setText('Calcular resultado' if brute else 'Ver resultado')
-        self.table.horizontalHeaderItem(1).setText('Costo rama' if brute else 'Costo')
+        self.table.setColumnHidden(2, algorithm != 'A*')
+        self.table.setColumnHidden(3, algorithm != 'A*')
+        self.table.horizontalHeaderItem(1).setText('Rama g' if brute else 'g')
         self.table.setToolTip('En fuerza bruta, los costos y padres pertenecen a la rama mostrada; '
                               'visitado significa visto alguna vez, no descartado definitivamente.')
         self.history.blockSignals(True)
@@ -282,6 +248,130 @@ class Window(QMainWindow):
         self.timeline.setRange(0, len(self.steps) - 1)
         self.timeline.blockSignals(False)
         self.show_step(0)
+
+    def closeEvent(self,event):
+        self.pause()
+        if self.export_job is not None:
+            self.export_job.cancel()
+        event.accept()
+
+    def update_presentation(self,step):
+        self.presentation_heading.setText(self.algorithm.currentText())
+        self.presentation_step.setText(step.message)
+        values = f'Actual: {step.current if step.current is not None else "—"} · Vistos: {len(step.visited)}'
+        if step.pass_number: values += f'\nPasada: {step.pass_number}'
+        if step.heuristic is not None and step.current is not None:
+            node=step.current
+            values += f'\ng={fmt(step.distances[node])} · h={step.heuristic[node]:.3f} · f={step.distances[node]+step.heuristic[node]:.3f}'
+        if step.candidates: values += f'\nCaminos completos: {step.candidates}'
+        self.presentation_values.setText(values)
+        path_label='Mejor ruta provisional' if step.limited else 'Ruta encontrada'
+        labels=[('unseen','Sin visitar'),('frontier','Frontera / rama actual'),('visited','Visitado / visto'),
+                ('current','Actual / arista examinada'),('path',path_label),('negative','Afectado por ciclo negativo')]
+        self.presentation_legend.setText('<br>'.join(
+            f'<span style="background-color:{COLORS[key]};">&nbsp; {label} &nbsp;</span>' for key,label in labels))
+        self.presentation_distances.setText('Distancias g\n' + ' · '.join(f'{n}: {fmt(step.distances[n])}' for n in self.model.nodes))
+
+    def toggle_presentation(self):
+        self.presentation_mode=not self.presentation_mode
+        self.sidebar_stack.setCurrentIndex(1 if self.presentation_mode else 0)
+        self.presentation_button.setText('Volver al laboratorio' if self.presentation_mode else 'Pasar a presentación')
+
+    def import_variant(self):
+        path,_=QFileDialog.getOpenFileName(self,'Seleccionar variante ponderada','','Grafos JSON (*.json)')
+        if not path: return
+        try:
+            model=load_graph(path)
+        except (ValueError,OSError) as error:
+            QMessageBox.warning(self,'Grafo inválido',str(error))
+            return
+        self.negative_model=model
+        self.graph_choice.setItemText(1,'Variante ponderada')
+        self.graph_choice.model().item(1).setEnabled(True)
+        if self.graph_choice.currentIndex()==1:
+            self.select_graph(1)
+        else:
+            self.graph_choice.setCurrentIndex(1)
+
+    def select_graph(self,index):
+        if index==1 and self.negative_model is None: return
+        self.pause()
+        self.model=self.original_model if index==0 else self.negative_model
+        self.graph_name=self.graph_choice.currentText()
+        self.canvas.model=self.model
+        old_source,old_target=self.source.currentText(),self.target.currentText()
+        for combo,old in ((self.source,old_source),(self.target,old_target)):
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItems([str(n) for n in self.model.nodes])
+            if old in [str(n) for n in self.model.nodes]: combo.setCurrentText(old)
+            combo.blockSignals(False)
+        self.algorithm.blockSignals(True)
+        for i,name in enumerate(ALGORITHMS):
+            self.algorithm.model().item(i).setEnabled(not(self.model.has_negative_weights and name in ('Dijkstra','A*')))
+        if self.model.has_negative_weights and self.algorithm.currentText() in ('Dijkstra','A*'):
+            self.algorithm.setCurrentText('Bellman–Ford')
+        self.algorithm.blockSignals(False)
+        kind='dirigido' if self.model.graph.is_directed() else 'no dirigido'
+        self.subtitle.setText(f'Diego Eduardo Zapata Aguilar · {len(self.model.nodes)} nodos · {self.model.graph.ecount()} aristas · {kind}')
+        self.table.setRowCount(len(self.model.nodes))
+        self.prepare()
+
+    def export_image(self):
+        self.pause()
+        path,_=QFileDialog.getSaveFileName(self,'Exportar paso actual',f'paso-{self.index+1:06d}.png','Imagen PNG (*.png)')
+        if not path: return
+        if not path.lower().endswith('.png'): path+='.png'
+        try:
+            step=self.steps[self.index]
+            total=str(len(self.steps))+('+' if self.stream is not None else '')
+            image=render_slide(self.model,step,int(self.source.currentText()),int(self.target.currentText()),
+                               self.algorithm.currentText(),self.graph_name,self.index,total,self.presentation_mode)
+            if not image.save(path,'PNG'): raise OSError('No se pudo guardar la imagen.')
+            self.statusBar().showMessage(f'Imagen guardada: {path}',8000)
+        except (OSError,ValueError) as error:
+            QMessageBox.warning(self,'Error al exportar',str(error))
+
+    def export_process(self):
+        self.pause()
+        folder=QFileDialog.getExistingDirectory(self,'Guardar carpeta del proceso')
+        if not folder: return
+        output=Path(folder)/('pylab-'+datetime.now().strftime('%Y%m%d-%H%M%S')+'-'+uuid4().hex[:6])
+        a,b=int(self.source.currentText()),int(self.target.currentText())
+        algorithm=self.algorithm.currentText()
+        if algorithm==ALGORITHMS[3]:
+            iterator=brute_force(self.model,a,b,self.limit.value())
+            total=f'≤ {self.limit.value()+1}'
+            maximum=self.limit.value()+1
+        else:
+            iterator=self.steps
+            total=maximum=len(self.steps)
+        self.export_dialog=QProgressDialog('Guardando todos los pasos como PNG…','Cancelar',0,maximum,self)
+        self.export_dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        self.export_dialog.setMinimumDuration(0)
+        self.export_dialog.setAutoClose(False)
+        self.export_dialog.setAutoReset(False)
+        job=ExportJob(output,iterator,self.model,a,b,algorithm,self.graph_name,total,self)
+        self.export_job=job
+        job.progress.connect(self.export_dialog.setValue)
+        job.finished.connect(self.export_finished)
+        job.failed.connect(self.export_failed)
+        self.export_dialog.canceled.connect(job.cancel)
+        self.export_dialog.show()
+        QTimer.singleShot(0,job.start)
+
+    def export_finished(self,folder):
+        self.export_dialog.close()
+        count=self.export_job.count
+        self.statusBar().showMessage(f'{count} imágenes guardadas en {folder}',15000)
+        self.export_job.deleteLater()
+        self.export_job=None
+
+    def export_failed(self,message):
+        self.export_dialog.close()
+        QMessageBox.warning(self,'Error al guardar el proceso',message)
+        self.export_job.deleteLater()
+        self.export_job=None
 
     def swap(self):
         a, b = self.source.currentText(), self.target.currentText()
@@ -375,7 +465,7 @@ class Window(QMainWindow):
     def show_step(self, index):
         self.index = max(0, min(index, len(self.steps) - 1))
         step = self.steps[self.index]
-        self.route_legend.setText('● Mejor provisional' if step.limited else '● Ruta final')
+        self.route_legend.setText('  Mejor provisional  ' if step.limited else '  Ruta encontrada  ')
         self.canvas.step = step
         self.canvas.update()
         self.message.setText(step.message)
@@ -397,38 +487,45 @@ class Window(QMainWindow):
         for row, node in enumerate(self.model.nodes):
             cost = step.distances[node]
             parent = str(step.parents[node][0]) if node in step.parents else '—'
-            state = ('Provisional' if step.limited else 'Ruta') if node in step.path_nodes else 'Actual' if node == step.current else \
+            state = 'Ciclo −' if node in step.negative_nodes else ('Provisional' if step.limited else 'Ruta') if node in step.path_nodes else 'Actual' if node == step.current else \
                     'Rama' if node in step.branch_nodes else 'Visitado' if node in step.visited else 'Frontera' if node in step.frontier else 'Pendiente'
-            for col, text in enumerate((str(node), '∞' if cost == inf else f'{cost:g}', parent, state)):
+            h = step.heuristic.get(node) if step.heuristic is not None else None
+            values = (str(node), fmt(cost), f'{h:.2f}' if h is not None else '—',
+                      fmt(cost+h) if h is not None else '—', parent, state)
+            for col, text in enumerate(values):
                 item = QTableWidgetItem(text)
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                item.setBackground(QColor(COLORS[node_state(step,node)]))
                 self.table.setItem(row, col, item)
+        self.update_presentation(step)
 
-STYLE = '''
-QWidget { background: #101a2b; color: #dae4f4; font-family: "Sans Serif"; font-size: 12px; }
-QLabel#title { font-size: 25px; font-weight: bold; color: #f1f6ff; }
-QLabel#muted { color: #92a7c4; }
-QLabel#stats { background: #19283e; padding: 12px; border-radius: 8px; color: #7dd9f5; }
-QLabel#message { background: #19283e; padding: 12px; border-left: 3px solid #ffb454; border-radius: 6px; font-size: 14px; }
-QPushButton, QComboBox { background: #22324b; border: 1px solid #354864; border-radius: 7px; padding: 9px 12px; }
-QPushButton:hover { background: #314867; }
-QPushButton:disabled { color: #607089; background: #172338; }
-QPushButton#primary { background: #40d9ac; color: #0b1a20; font-weight: bold; }
-QPushButton#primary:hover { background: #72e9c4; }
-QComboBox::drop-down { border: none; width: 22px; }
-QTableWidget, QListWidget { background: #0c1322; border: 1px solid #263852; border-radius: 6px; gridline-color: #1e2d44; }
-QHeaderView::section { background: #22324b; color: #bcd0ec; padding: 7px; border: none; }
-QListWidget::item { padding: 8px; border-bottom: 1px solid #1b2a40; }
-QListWidget::item:selected { background: #2b4563; color: #ffffff; }
-QSlider::groove:horizontal { background: #2b3b55; height: 6px; border-radius: 3px; }
-QSlider::handle:horizontal { background: #40d9ac; width: 16px; margin: -5px 0; border-radius: 8px; }
-QSplitter::handle { background: #263852; width: 2px; }
-QToolTip { background: #22324b; color: #ffffff; padding: 6px; border: 1px solid #40d9ac; }
-'''
+STYLE = """
+QWidget { background: #ffffff; color: #393631; font-family: "Excalifont"; font-size: 14px; }
+QLabel#title { font-size: 29px; }
+QLabel#muted { color: #817b72; font-size: 12px; }
+QLabel#panelHeading { font-size: 24px; padding: 8px; }
+QLabel#stats { background: #eef5fa; padding: 10px; border-radius: 8px; font-size: 12px; }
+QLabel#message { background: #fff5e5; padding: 12px; border: 1px solid #ead7b4; border-radius: 9px; }
+QPushButton, QComboBox, QSpinBox { background: #faf9f6; border: 1px solid #aaa399; border-radius: 8px; padding: 8px 11px; }
+QPushButton:hover { background: #eef4f9; border-color: #817b71; }
+QPushButton:disabled { color: #b8b2a9; border-color: #e3ded6; }
+QPushButton#primary { background: #dff0e4; border: 1px solid #82ab90; }
+QComboBox::drop-down { border: none; width: 20px; }
+QTableWidget, QListWidget { background: #ffffff; border: 1px solid #ddd6cc; border-radius: 8px; gridline-color: #ebe6de; font-size: 12px; }
+QHeaderView::section { background: #f6f3ed; padding: 7px 3px; border: none; font-size: 12px; }
+QListWidget::item { padding: 10px; border-bottom: 1px solid #eee8df; }
+QListWidget::item:selected { background: #f0e6fc; color: #393631; }
+QSlider::groove:horizontal { background: #ebe5dd; height: 5px; border-radius: 2px; }
+QSlider::handle:horizontal { background: #c5dccd; width: 17px; margin: -5px 0; border: 1px solid #859d8d; border-radius: 8px; }
+QSplitter::handle { background: #e8e3db; width: 1px; }
+QToolTip { background: #fff5e5; color: #393631; padding: 6px; border: 1px solid #d7c6a9; }
+"""
 
 def main():
     app = QApplication(sys.argv)
     app.setStyle('Fusion')
+    load_font()
+    app.setFont(QFont(FONT,11))
     app.setStyleSheet(STYLE)
     window = Window()
     window.show()
